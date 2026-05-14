@@ -14,6 +14,26 @@
 #include <map>
 #include <boost/foreach.hpp>
 
+namespace
+{
+struct CompareDeviceInfo
+{
+    bool operator()(const DeviceInfo &a, const DeviceInfo &b) const
+    {
+        if (a.device_name != b.device_name) {
+            return a.device_name < b.device_name;
+        }
+        if (a.protocol_stack != b.protocol_stack) {
+            return a.protocol_stack < b.protocol_stack;
+        }
+        if (a.interface_name != b.interface_name) {
+            return a.interface_name < b.interface_name;
+        }
+        return a.port_name < b.port_name;
+    }
+};
+}  // namespace
+
 
 // =============================================================================
 // DeviceInfo
@@ -284,6 +304,7 @@ NodeHandle HandleManager::CreateEposHandle(const DeviceInfo &device_info, const 
     }
 
     NodeInfo node_info(device_info, node_id);
+    static std::map<DeviceInfo, std::shared_ptr<DeviceHandle>, CompareDeviceInfo> existing_device_handles;
     // record existing handles
     static std::map<NodeInfo, std::weak_ptr<NodeHandle>, CompareNodeInfo> existing_node_handles;
 
@@ -295,18 +316,20 @@ NodeHandle HandleManager::CreateEposHandle(const DeviceInfo &device_info, const 
             return *existing_handle;
         }
 
-        if (!m_master_handle) {
-            // Create Master Handle
-            m_master_handle = std::make_shared<NodeHandle>(NodeHandle(node_info));
-            existing_node_handles[node_info] = m_master_handle;
-            return *m_master_handle;
+        std::shared_ptr<DeviceHandle> device_handle;
+        const auto device_handle_iter = existing_device_handles.find(device_info);
+        if (device_handle_iter == existing_device_handles.end()) {
+            device_handle = std::make_shared<DeviceHandle>(DeviceHandle(device_info));
+            existing_device_handles[device_info] = device_handle;
         } else {
-            // Create Sub Handle
-            const std::shared_ptr<NodeHandle> sub_handle = std::make_shared<NodeHandle>(NodeHandle(node_info, *m_master_handle));
-            m_sub_handles.push_back(sub_handle);
-            existing_node_handles[node_info] = sub_handle;
-            return *sub_handle;
+            device_handle = device_handle_iter->second;
         }
+
+        const std::shared_ptr<NodeHandle> node_handle =
+            std::make_shared<NodeHandle>(NodeHandle(*device_handle, node_id));
+        m_sub_handles.push_back(node_handle);
+        existing_node_handles[node_info] = node_handle;
+        return *node_handle;
     } catch (const EposException &e) {
         std::cout << e.what() << std::endl;
         throw EposException("Create EposHandle (Could not identify node)");

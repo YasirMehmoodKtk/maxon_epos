@@ -18,8 +18,10 @@ void EposProfileVelocityMode::init(NodeHandle &node_handle)
 void EposProfileVelocityMode::activate()
 {}
 
-void EposProfileVelocityMode::read()
-{}
+std::vector<int> EposProfileVelocityMode::read()
+{
+    return {0, 0, 0};
+}
 
 void EposProfileVelocityMode::write(const int position, const int velocity, const int current)
 {}

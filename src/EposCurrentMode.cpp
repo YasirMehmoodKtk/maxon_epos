@@ -19,8 +19,10 @@ void EposCurrentMode::init(NodeHandle &node_handle)
 void EposCurrentMode::activate()
 {}
 
-void EposCurrentMode::read()
-{}
+std::vector<int> EposCurrentMode::read()
+{
+    return {0, 0, 0};
+}
 
 void EposCurrentMode::write(const int position, const int velocity, const int current)
 {}

@@ -18,7 +18,7 @@ public:
 
     virtual void init(NodeHandle &node_handle);
     virtual void activate();
-    virtual void read();
+    virtual std::vector<int> read();
     virtual void write(const int position, const int velocity, const int current);
 
 private:

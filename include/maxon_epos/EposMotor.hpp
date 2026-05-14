@@ -20,7 +20,8 @@ class EposMotor {
         EposMotor();
         EposMotor(std::string motor_name, std::string EposModel, std::string protocol_stack, std::string interface, std::string port,
                 int baudrate, int timeout,
-                int encoder_type, int encoder_resolution, int gear_ratio, int encoder_inverted_polarity, std::string control_mode);
+                int encoder_type, int encoder_resolution, int gear_ratio, int encoder_inverted_polarity, std::string control_mode,
+                unsigned short node_id, int position_mode_velocity);
         virtual ~EposMotor();
         bool set_velocity(int velocity);
 
@@ -40,6 +41,8 @@ class EposMotor {
         void initEncoderParams();
         void initProfilePosition();
         void enableMotor();
+        void disableMotor();
+        void logDeviceState(const std::string & stage);
         void ReadThread(EposMotor * pModule);
         void ReadLoop();
         void WriteThread(EposMotor * pModule);
@@ -61,6 +64,7 @@ class EposMotor {
         int m_velocity;
         int m_effort;
         int m_current;
+        std::atomic_bool m_has_target;
 
         int _target_pos;                // target position in ticks
         bool _m_readLoop;
@@ -87,6 +91,7 @@ class EposMotor {
         int _encoder_resolution; // ,,,
         int _gear_ratio; // ,,,
         bool _encoder_inverted_polarity;     // ,,,
+        unsigned short _node_id;
         int _position_mode_velocity, _position_mode_acceleration, _position_mode_deceleration;  // ,,,
 };
 

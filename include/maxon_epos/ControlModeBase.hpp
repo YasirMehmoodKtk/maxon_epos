@@ -22,7 +22,7 @@ public:
     virtual void activate() = 0;
 
     // read something required for operation mode
-    std::vector<int>  read();   // returns {pos, vel, current}
+    virtual std::vector<int> read();   // returns {pos, vel, current}
 
     // write commands of operation mode
     virtual void write(const int position, const int velocity, const int current) = 0;

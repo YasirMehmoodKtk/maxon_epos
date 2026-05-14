@@ -15,10 +15,10 @@
 /**
  * @brief Constructor
  */
-EposManager::EposManager(std::string EposModel, std::string motor_name, std::string protocol_stack, std::string interface, std::string port, int baudrate, int timeout, int encoder_type, int encoder_resolution, int gear_ratio, bool encoder_inverted_polarity, std::string control_mode)
+EposManager::EposManager(std::string EposModel, std::string motor_name, std::string protocol_stack, std::string interface, std::string port, int baudrate, int timeout, int encoder_type, int encoder_resolution, int gear_ratio, bool encoder_inverted_polarity, std::string control_mode, unsigned short node_id, int position_mode_velocity)
     : _EposModel(EposModel), _protocol_stack(protocol_stack), _interface(interface), _port(port), _baudrate(baudrate), _timeout(timeout), _encoder_type(encoder_type), _encoder_resolution(encoder_resolution),
     _gear_ratio(gear_ratio), _encoder_inverted_polarity(encoder_inverted_polarity), _control_mode(control_mode),
-    _motor_name(motor_name)
+    _motor_name(motor_name), _node_id(node_id), _position_mode_velocity(position_mode_velocity)
 {}
 
 /**
@@ -30,7 +30,7 @@ EposManager::~EposManager() = default;
 bool EposManager::init()
 {
     _motor = std::shared_ptr<EposMotor>(
-        new EposMotor( _motor_name, _EposModel, _protocol_stack, _interface, _port, _baudrate, _timeout, _encoder_type, _encoder_resolution, _gear_ratio, _encoder_inverted_polarity, _control_mode)
+        new EposMotor( _motor_name, _EposModel, _protocol_stack, _interface, _port, _baudrate, _timeout, _encoder_type, _encoder_resolution, _gear_ratio, _encoder_inverted_polarity, _control_mode, _node_id, _position_mode_velocity)
     );
     _motor->init();
     return true;

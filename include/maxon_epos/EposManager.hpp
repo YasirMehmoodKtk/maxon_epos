@@ -15,7 +15,7 @@
 class EposManager {
     public:
         EposManager() = default;
-        EposManager(std::string EposModel, std::string motor_name, std::string protocol_stack, std::string interface, std::string port, int baudrate, int timeout, int encoder_type, int encoder_resolution, int gear_ratio, bool encoder_inverted_polarity, std::string control_mode);
+        EposManager(std::string EposModel, std::string motor_name, std::string protocol_stack, std::string interface, std::string port, int baudrate, int timeout, int encoder_type, int encoder_resolution, int gear_ratio, bool encoder_inverted_polarity, std::string control_mode, unsigned short node_id, int position_mode_velocity);
         virtual ~EposManager();
 
         bool init();
@@ -40,6 +40,8 @@ class EposManager {
         int _encoder_resolution; // ,,,
         int _gear_ratio; // ,,,
         bool _encoder_inverted_polarity;     // ,,,
+        unsigned short _node_id;
+        int _position_mode_velocity;
 };
 
 #endif // _EposManager_HPP

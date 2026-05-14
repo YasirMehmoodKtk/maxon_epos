@@ -28,17 +28,19 @@
  */
 EposMotor::EposMotor(std::string motor_name, std::string EposModel, std::string protocol_stack, std::string interface, std::string port,
                 int baudrate, int timeout,
-                int encoder_type, int encoder_resolution, int gear_ratio, int encoder_inverted_polarity, std::string control_mode) : _motor_name(motor_name),
+                int encoder_type, int encoder_resolution, int gear_ratio, int encoder_inverted_polarity, std::string control_mode,
+                unsigned short node_id, int position_mode_velocity) : m_position(0), m_velocity(0), m_effort(0), m_current(0), m_has_target(false), _motor_name(motor_name),
         _EposModel(EposModel), _protocol_stack(protocol_stack), _interface(interface), _port(port),
         _encoder_type(encoder_type), _encoder_resolution(encoder_resolution), _gear_ratio(gear_ratio), _encoder_inverted_polarity(encoder_inverted_polarity),
         _baudrate(baudrate), _timeout (timeout),
-        _control_mode (control_mode), _target_pos(0)
+        _control_mode (control_mode), _node_id(node_id), _target_pos(0), _m_readLoop(false), m_bIsRunning(false), m_readLoop(false),
+        m_pWriteThread(nullptr), m_pReadThread(nullptr)
 {
     // m_position = 0; //, m_velocity(0), m_effort(0), m_current(0)
 
-    _position_mode_velocity = 6250000; // ,,,
-    _position_mode_acceleration = 10000; // ,,,
-    _position_mode_deceleration = 10000; // ,,,
+    _position_mode_velocity = position_mode_velocity;
+    _position_mode_acceleration = 10000;
+    _position_mode_deceleration = 10000;
     _update_interval = 30;
 }
 
@@ -49,13 +51,25 @@ EposMotor::EposMotor(std::string motor_name, std::string EposModel, std::string 
 EposMotor::~EposMotor()
 {
     try {
-        VCS_NODE_COMMAND_NO_ARGS(SetDisableState, m_epos_handle);
         _m_readLoop = false;
+        m_bIsRunning = false;
+
+        if (m_pWriteThread != nullptr)
+        {
+            m_pWriteThread->join();
+            delete m_pWriteThread;
+            m_pWriteThread = nullptr;
+        }
+
         if (m_pReadThread != nullptr)
         {
             m_pReadThread->join();
             delete m_pReadThread;
             m_pReadThread = nullptr;
+        }
+
+        if (m_epos_handle.ptr) {
+            disableMotor();
         }
     } catch (const EposException &e) {
         std::cout << e.what() << std::endl;
@@ -65,20 +79,27 @@ EposMotor::~EposMotor()
 void EposMotor::init()
 {
     initEposDeviceHandle();
-
-    VCS_NODE_COMMAND_NO_ARGS(SetDisableState, m_epos_handle);
-
     initDeviceError();
+    disableMotor();
+    logDeviceState("after disable");
     initProtocolStackChanges();
     initControlMode(_control_mode);
     initEncoderParams();
     initProfilePosition();
+    logDeviceState("after profile config");
 
     _m_readLoop = true;
     m_pReadThread = new std::thread([this] { this->ReadThread(this); });    // start readloop
     sleep(1);
     _target_pos = m_position;
+    m_has_target = false;
+    if (m_control_mode) {
+        m_control_mode->activate();
+    }
+    logDeviceState("after mode activate");
     enableMotor();      // enable the motor
+    usleep(100000);
+    logDeviceState("after enable");
     std::vector<int> readings = m_control_mode->read();     // read current position and set it to _home_qc
 }
 
@@ -108,7 +129,7 @@ void EposMotor::ReadLoop()
         }
         m_position = positionls;
         m_velocity = velocityls;
-        m_effort = currentls;
+        m_current = currentls;
 
         std::chrono::high_resolution_clock::time_point current=std::chrono::high_resolution_clock::now();
         int64_t ms=(std::chrono::duration_cast<std::chrono::milliseconds>( current - last )).count();
@@ -144,15 +165,17 @@ std::vector<int> EposMotor::read()
 void EposMotor::write(const int position, const int velocity, const int current)
 {
     _target_pos = position;
+    m_has_target = false;
 
-    // previous implementation (not thread)
-    // try {
-    //     if (m_control_mode) {
-    //         m_control_mode->write(position, velocity, current);
-    //     }
-    // } catch (const EposException &e) {
-    //     std::cout << e.what() << std::endl;
-    // }
+    try {
+        if (m_control_mode) {
+            m_control_mode->write(position, velocity, current);
+        } else {
+            std::cout << "EposMotor's control mode is not available." << std::endl;
+        }
+    } catch (const EposException &e) {
+        std::cout << e.what() << std::endl;
+    }
 }
 
 void EposMotor::WriteThread(EposMotor * pModule)
@@ -164,7 +187,9 @@ void EposMotor::WriteThread(EposMotor * pModule)
 void EposMotor::Start()
 {
     m_bIsRunning = true;
-    m_pReadThread = new std::thread([this] { this->WriteThread(this); });
+    if (m_pWriteThread == nullptr) {
+        m_pWriteThread = new std::thread([this] { this->WriteThread(this); });
+    }
 }
 
 //! \brief Terminates and joins the thread that is spinning in the write loop that sends periodic SetJoint commands to the module over the CAN bus.
@@ -186,21 +211,25 @@ void EposMotor::WriteLoop()
     while (m_bIsRunning)
     {
         std::chrono::high_resolution_clock::time_point last=std::chrono::high_resolution_clock::now();
-        if (_target_pos != m_position && std::abs( _target_pos - m_position) > 4)  // 4 is error tolerance in ticks
+        if (m_has_target && _target_pos != m_position && std::abs( _target_pos - m_position) > 4)
         {
             double second = 0.001 * _update_interval;
-            int max_increment = (int)(second * _position_mode_velocity);
+            int max_increment = static_cast<int>(second * _position_mode_velocity);
             int increment = max_increment;
-            if (_target_pos < m_position)
+            if (_target_pos < m_position) {
                 increment = -increment;
-            if ( std::abs(_target_pos - m_position) < max_increment )
+            }
+            if (std::abs(_target_pos - m_position) < max_increment) {
                 increment = _target_pos - m_position;
+            }
             try {
-                int new_pos = m_position + increment, temp=0.0;
-                if (m_control_mode){
-                    m_control_mode->write(new_pos, temp, temp); // TODO now, only for position control
-                } else
+                int new_pos = m_position + increment;
+                int temp = 0;
+                if (m_control_mode) {
+                    m_control_mode->write(new_pos, temp, temp);
+                } else {
                     std::cout << "EposMotor's control mode is not available." << std::endl;
+                }
             } catch (const EposException &e) {
                 int error = _target_pos - m_position;
                 std::cout << "Motor ticks: " << error << " [ticks]" << std::endl;
@@ -222,15 +251,73 @@ void EposMotor::WriteLoop()
 void EposMotor::initEposDeviceHandle()
 {
     const DeviceInfo device_info(_EposModel, _protocol_stack, _interface, _port);
-    const unsigned short node_id(1);
 
     // // create epos handle
-    m_epos_handle = HandleManager::CreateEposHandle(device_info, node_id);
+    m_epos_handle = HandleManager::CreateEposHandle(device_info, _node_id);
 }
 
 void EposMotor::enableMotor()
 {
     VCS_NODE_COMMAND_NO_ARGS(SetEnableState, m_epos_handle);
+}
+
+void EposMotor::logDeviceState(const std::string & stage)
+{
+    try {
+        unsigned short state = 0;
+        int is_enabled = 0;
+        int is_disabled = 0;
+        int is_quick_stopped = 0;
+        int is_in_fault = 0;
+        char operation_mode = 0;
+        unsigned int profile_velocity = 0;
+        unsigned int profile_acceleration = 0;
+        unsigned int profile_deceleration = 0;
+
+        VCS_NODE_COMMAND(GetState, m_epos_handle, &state);
+        VCS_NODE_COMMAND(GetEnableState, m_epos_handle, &is_enabled);
+        VCS_NODE_COMMAND(GetDisableState, m_epos_handle, &is_disabled);
+        VCS_NODE_COMMAND(GetQuickStopState, m_epos_handle, &is_quick_stopped);
+        VCS_NODE_COMMAND(GetFaultState, m_epos_handle, &is_in_fault);
+        VCS_NODE_COMMAND(GetOperationMode, m_epos_handle, &operation_mode);
+        VCS_NODE_COMMAND(
+            GetPositionProfile,
+            m_epos_handle,
+            &profile_velocity,
+            &profile_acceleration,
+            &profile_deceleration);
+
+        std::cout << "[EposMotor] " << stage
+                  << ": state=" << state
+                  << ", enabled=" << is_enabled
+                  << ", disabled=" << is_disabled
+                  << ", quick_stop=" << is_quick_stopped
+                  << ", fault=" << is_in_fault
+                  << ", op_mode=" << static_cast<int>(operation_mode)
+                  << ", profile=(" << profile_velocity
+                  << ", " << profile_acceleration
+                  << ", " << profile_deceleration << ")"
+                  << std::endl;
+    } catch (const EposException &e) {
+        std::cout << "[EposMotor] " << stage
+                  << ": failed to read device state: "
+                  << e.what() << std::endl;
+    }
+}
+
+void EposMotor::disableMotor()
+{
+    int is_in_fault = 0;
+    VCS_NODE_COMMAND(GetFaultState, m_epos_handle, &is_in_fault);
+    if (is_in_fault) {
+        VCS_NODE_COMMAND_NO_ARGS(ClearFault, m_epos_handle);
+    }
+
+    int is_disabled = 0;
+    VCS_NODE_COMMAND(GetDisableState, m_epos_handle, &is_disabled);
+    if (!is_disabled) {
+        VCS_NODE_COMMAND_NO_ARGS(SetDisableState, m_epos_handle);
+    }
 }
 
 /**
@@ -307,23 +394,49 @@ void EposMotor::initControlMode(std::string control_mode)
  */
 void EposMotor::initEncoderParams()
 {   
-    const int type( _encoder_type );
-    VCS_NODE_COMMAND(SetSensorType, m_epos_handle, type);
+    unsigned short configured_type = 0;
+    unsigned int configured_resolution = 0;
+    int configured_inverted_polarity = 0;
+    unsigned char configured_vel_dimension = 0;
+    char configured_vel_notation = 0;
 
+    VCS_NODE_COMMAND(GetSensorType, m_epos_handle, &configured_type);
+    VCS_NODE_COMMAND(
+        GetIncEncoderParameter,
+        m_epos_handle,
+        &configured_resolution,
+        &configured_inverted_polarity);
+    VCS_NODE_COMMAND(
+        GetVelocityUnits,
+        m_epos_handle,
+        &configured_vel_dimension,
+        &configured_vel_notation);
+
+    std::cout << "Epos motor ( " << _motor_name << " ) controller config:"
+              << " sensor_type=" << configured_type
+              << ", encoder_resolution=" << configured_resolution
+              << ", inverted_polarity=" << configured_inverted_polarity
+              << ", velocity_units=(" << static_cast<int>(configured_vel_dimension)
+              << ", " << static_cast<int>(configured_vel_notation) << ")"
+              << std::endl;
+
+    const int type(_encoder_type);
     if (type == 1 || type == 2) {
-        // Incremental Encoder
         const int resolution(_encoder_resolution);
         const int gear_ratio(_gear_ratio);
         if (resolution == 0 || gear_ratio == 0)
             throw EposException("Please set parameter 'resolution' and 'gear_ratio'");
-        const bool inverted_polarity(_encoder_inverted_polarity);
-        std::cout << "Epos motor ( " << _motor_name << ") has set." << std::endl;
-        if (inverted_polarity) {
-            std::cout << "Epos motor ( " << _motor_name << ") : Inverted polarity is True" << std::endl;
+
+        if (configured_type != static_cast<unsigned short>(type) ||
+            configured_resolution != static_cast<unsigned int>(resolution) ||
+            configured_inverted_polarity != static_cast<int>(_encoder_inverted_polarity))
+        {
+            std::cout << "[EposMotor] Warning: controller encoder config differs from code defaults."
+                      << " code sensor_type=" << type
+                      << ", code encoder_resolution=" << resolution
+                      << ", code inverted_polarity=" << static_cast<int>(_encoder_inverted_polarity)
+                      << std::endl;
         }
-        
-        VCS_NODE_COMMAND(SetIncEncoderParameter, m_epos_handle, resolution, inverted_polarity);
-        VCS_NODE_COMMAND(SetVelocityUnits, m_epos_handle, 0xA4, -3); // 0 for STANDARD; -1 VN_DECI; -2 VN_CENTI; -3 VN_MILLI
 
         // m_max_qc = 4 * gear_ratio * resolution
 
